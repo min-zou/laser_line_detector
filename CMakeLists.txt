@@ -22,6 +22,7 @@ find_package(Eigen REQUIRED)
 
 find_package(OpenCV 3 REQUIRED)
 
+find_package(Ceres REQUIRED)
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
 ## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
@@ -100,8 +101,8 @@ catkin_package(
 
 include_directories(include ${catkin_INCLUDE_DIRS}
   ${Eigen_INCLUDE_DIRS}
-    ${OpenCV_INCLUDE_DIRS}
-
+  ${OpenCV_INCLUDE_DIRS}
+  ${CERES_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS})
 
 add_executable(showtest example/test.cc)
@@ -109,6 +110,7 @@ target_link_libraries(showtest
   ${OpenCV_LIBRARIES}
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
+  ${CERES_LIBRARIES}
   )
 
 #############

@@ -20,13 +20,45 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <Eigen/Eigen>
+#include "ceres/ceres.h"
 // #include <ros/log.h>
+
+using namespace ceres;
+using namespace std;
+struct CostFunctor {
+	CostFunctor(double k1, double k2): k1_(k1), k2_(k2)
+	{}
+	template <typename T>
+	bool operator()(const T* const main_k, T* residual) const {
+		// residual[0] = T(10.0) - x[0];
+
+		T r1 = T(k1_) - main_k[0] ;
+		T r2 = T(k2_) - main_k[0] ;
+
+		if (r1 * r1 < r2 * r2)
+		{
+			residual[0] = r1;
+			T r = T(k2_) - main_k[1];
+			residual[1] = r;
+		}
+		else
+		{
+			residual[0] = r2;
+			T r = T(k1_) - main_k[1];
+			residual[1] = r;
+		}
+
+		return true;
+	}
+	double k1_ , k2_;
+};
+
 int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "laser_detector");
 	{
 		boost::shared_ptr<sensor_msgs::LaserScan const> scan_ptr;    // 有const
-		scan_ptr = ros::topic::waitForMessage<sensor_msgs::LaserScan>("scan", ros::Duration(3));
+		scan_ptr = ros::topic::waitForMessage<sensor_msgs::LaserScan>("scan", ros::Duration(10));
 		tf::TransformListener tfListener_;
 		if (scan_ptr != NULL)
 		{
@@ -77,6 +109,7 @@ int main(int argc, char **argv)
 			int count = 0;
 			Eigen::Vector3d tmp_line_param;
 			std::vector<cv::Point> filter_laser_pts_;
+			// std::vector<std::vector<cv::Point>> best_pts;
 			for (auto&pt : laser_pts)
 			{
 
@@ -93,10 +126,10 @@ int main(int argc, char **argv)
 					double C = last_pt.x * line_start_pt.y
 					           - line_start_pt.x * last_pt.y;
 					double dist = fabs(A * pt.x * 1.0 + B * pt.y * 1.0 + C)
-					              / sqrt(A * A + B * B);
+					              / ceres::sqrt(A * A + B * B);
 					ROS_INFO("line dst:%f", dist);
 					// std::cerr << "dst is " << dist << std::endl;
-					if (dist * 0.05 < 0.08)
+					if (dist * 0.05 <= 0.05)
 					{
 						// std::cerr << "pop dst is " << dist << std::endl;
 
@@ -104,19 +137,18 @@ int main(int argc, char **argv)
 					}
 					else
 					{
+						// if (dist < 0.789)
+						// {
+						// 	double pt_dst = sqrt(pow(last_pt.x - pt.x, 2) +
+						// 	                     pow(last_pt.y - pt.y, 2));
+						// 	if (pt_dst < 0.789)
+						// 	{
+						// 		filter_laser_pts_.push_back(last_pt);
 
-						if (dist < 0.789)
-						{
-							double pt_dst = sqrt(pow(last_pt.x - pt.x, 2) +
-							                     pow(last_pt.y - pt.y, 2));
-							if (pt_dst < 0.789)
-							{
-								filter_laser_pts_.push_back(last_pt);
+						// 		filter_laser_pts_.push_back(pt);
+						// 	}
 
-								filter_laser_pts_.push_back(pt);
-							}
-
-						}
+						// }
 					}
 					filter_laser_pts_.push_back(pt);
 				}
@@ -131,15 +163,61 @@ int main(int argc, char **argv)
 			// 	// cv::imshow("test", tmp_line);
 			// 	// cv::waitKey(5);
 			// }
+			// std::vector<Eigen::Vector3d> line_params;
 			for (int i = 0; i < filter_laser_pts_.size() - 2; i = i + 2)
 			{
 				cv::line(tmp_line, filter_laser_pts_[i], filter_laser_pts_[i + 1], cv::Scalar(180), 2);
 				cv::imshow("test", tmp_line);
 				cv::waitKey(15);
+
+				double A = filter_laser_pts_[i].y - filter_laser_pts_[i + 1].y;
+				double B = filter_laser_pts_[i + 1].x - filter_laser_pts_[i].x;
+				double C = filter_laser_pts_[i].x * filter_laser_pts_[i + 1].y
+				           - filter_laser_pts_[i + 1].x * filter_laser_pts_[i].y;
+				line_params.push_back(Eigen::Vector3d(A, B, C));
 			}
 			cv::imshow("test", tmp_line);
 			cv::waitKey(1);
+			double main_k1 = 1;
+			double main_k2 = -1;
+			double main_k[2] = {1, -1};
+			// double main_k[2] = { -line_params.front()[0] / line_params.front()[1], line_params.front()[1] / line_params.front()[0]};
 
+			Problem problem;
+
+			// Set up the only cost function (also known as residual). This uses
+			// auto-differentiation to obtain the derivative (jacobian).
+			// CostFunction* cost_function =
+			//     new AutoDiffCostFunction<CostFunctor, 1, 1>(new CostFunctor);
+			// problem.AddResidualBlock(cost_function, NULL, &x);
+
+			// // Run the solver!
+			Solver::Options options;
+			// options.linear_solver_type = ceres::DENSE_QR;
+			options.minimizer_progress_to_stdout = true;
+			Solver::Summary summary;
+			for (auto&params : line_params)
+			{
+				if (params[1] == 0)
+				{
+					params[1] = 0.000001;
+				}
+				if (params[0] == 0)
+				{
+					params[0] = 0.000001;
+				}
+				problem.AddResidualBlock (     // 向问题中添加误差项
+				    // 使用自动求导，模板参数：误差类型，输出维度，输入维度，维数要与前面struct中一致
+				    new ceres::AutoDiffCostFunction<CostFunctor, 2, 2> (
+				        new CostFunctor ( -params[0] / params[1], params[1] / params[0] )
+				    ),
+				    new ceres::CauchyLoss(0.5),            // 核函数，这里不使用，为空
+				    main_k                 // 待估计参数
+				);
+			}
+			Solve(options, &problem, &summary);
+			cout << summary.BriefReport() << endl;
+			cout<< "angle is " << main_k[0] << endl;
 		}
 
 		// ros::spinOnce();
