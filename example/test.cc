@@ -22,7 +22,7 @@
 #include <Eigen/Eigen>
 #include "ceres/ceres.h"
 // #include <ros/log.h>
-
+// #include <cmath>
 using namespace ceres;
 using namespace std;
 struct CostFunctor {
@@ -56,6 +56,13 @@ struct CostFunctor {
 int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "laser_detector");
+
+
+	ros::NodeHandle nh;
+
+
+	ros::Publisher cmd_pub_ = nh.advertise<geometry_msgs::Twist>("cmd_vel", 100);
+
 	{
 		boost::shared_ptr<sensor_msgs::LaserScan const> scan_ptr;    // 有const
 		scan_ptr = ros::topic::waitForMessage<sensor_msgs::LaserScan>("scan", ros::Duration(10));
@@ -110,8 +117,10 @@ int main(int argc, char **argv)
 			Eigen::Vector3d tmp_line_param;
 			std::vector<cv::Point> filter_laser_pts_;
 			// std::vector<std::vector<cv::Point>> best_pts;
+			cv::Mat show = tmp_line.clone();
 			for (auto&pt : laser_pts)
 			{
+				cv::circle(show, cv::Point(pt.x, pt.y), 2, cv::Scalar(255, 255, 255), -1);
 
 				if (filter_laser_pts_.size() <= 1 || filter_laser_pts_.size() % 2 != 0)
 				{
@@ -128,8 +137,8 @@ int main(int argc, char **argv)
 					double dist = fabs(A * pt.x * 1.0 + B * pt.y * 1.0 + C)
 					              / ceres::sqrt(A * A + B * B);
 					ROS_INFO("line dst:%f", dist);
-					// std::cerr << "dst is " << dist << std::endl;
-					if (dist * 0.05 <= 0.05)
+					std::cerr << "dst is " << dist * 0.05 << std::endl;
+					if (dist * 0.05 <= 0.1)
 					{
 						// std::cerr << "pop dst is " << dist << std::endl;
 
@@ -137,6 +146,7 @@ int main(int argc, char **argv)
 					}
 					else
 					{
+
 						// if (dist < 0.789)
 						// {
 						// 	double pt_dst = sqrt(pow(last_pt.x - pt.x, 2) +
@@ -152,6 +162,8 @@ int main(int argc, char **argv)
 					}
 					filter_laser_pts_.push_back(pt);
 				}
+				cv::imshow("test", show);
+				cv::waitKey(1);
 			}
 			// if (filter_laser_pts_.size() % 2 != 0)
 			// {
@@ -166,16 +178,61 @@ int main(int argc, char **argv)
 			// std::vector<Eigen::Vector3d> line_params;
 			for (int i = 0; i < filter_laser_pts_.size() - 2; i = i + 2)
 			{
-				cv::line(tmp_line, filter_laser_pts_[i], filter_laser_pts_[i + 1], cv::Scalar(180), 2);
-				cv::imshow("test", tmp_line);
-				cv::waitKey(15);
-
+				// cv::line(tmp_line, filter_laser_pts_[i], filter_laser_pts_[i + 1], cv::Scalar(180), 2);
+				// cv::imshow("test", tmp_line);
+				// cv::waitKey(15);
 				double A = filter_laser_pts_[i].y - filter_laser_pts_[i + 1].y;
 				double B = filter_laser_pts_[i + 1].x - filter_laser_pts_[i].x;
 				double C = filter_laser_pts_[i].x * filter_laser_pts_[i + 1].y
 				           - filter_laser_pts_[i + 1].x * filter_laser_pts_[i].y;
 				line_params.push_back(Eigen::Vector3d(A, B, C));
 			}
+			std::vector<std::vector<cv::Point> > final_lines;
+			std::vector<Eigen::Vector3d> final_params;
+			for (auto&line : line_params)
+			{
+				std::vector<cv::Point> pt_line;
+				double A = line[0];
+				double B = line[1];
+				double C = line[2];
+				auto pt = laser_pts.begin();
+				while (pt != laser_pts.end())
+				{
+					double dist = fabs(A * pt->x * 1.0 + B * pt->y * 1.0 + C)
+					              / ceres::sqrt(A * A + B * B);
+					if (dist * 0.05 < 0.15)
+					{
+						pt_line.push_back(*pt);
+						pt = laser_pts.erase(pt);
+					}
+					else
+						pt++;
+				}
+				if (pt_line.size() > 30)
+				{
+					final_lines.push_back(pt_line);
+					final_params.push_back(line);
+				}
+			}
+			cerr << "finale line size is " << final_lines.size() << endl;
+
+			for (auto&pts : final_lines)
+			{
+				for (auto&pt : pts)
+				{
+					cv::circle(tmp_line, cv::Point(pt.x, pt.y), 2, cv::Scalar(255, 255, 255), -1);
+				}
+
+				cv::imshow("test", tmp_line);
+				cv::waitKey(1);
+			}
+
+
+			for (auto&line : final_params)
+			{
+
+			}
+
 			cv::imshow("test", tmp_line);
 			cv::waitKey(1);
 			double main_k1 = 1;
@@ -196,7 +253,7 @@ int main(int argc, char **argv)
 			// options.linear_solver_type = ceres::DENSE_QR;
 			options.minimizer_progress_to_stdout = true;
 			Solver::Summary summary;
-			for (auto&params : line_params)
+			for (auto&params : final_params)
 			{
 				if (params[1] == 0)
 				{
@@ -206,6 +263,8 @@ int main(int argc, char **argv)
 				{
 					params[0] = 0.000001;
 				}
+				cout << "origin angle1 is " << -params[0] / params[1] << endl;
+				cout << "origin angle2 is " << params[1] / params[0] << endl;
 				problem.AddResidualBlock (     // 向问题中添加误差项
 				    // 使用自动求导，模板参数：误差类型，输出维度，输入维度，维数要与前面struct中一致
 				    new ceres::AutoDiffCostFunction<CostFunctor, 2, 2> (
@@ -217,7 +276,39 @@ int main(int argc, char **argv)
 			}
 			Solve(options, &problem, &summary);
 			cout << summary.BriefReport() << endl;
-			cout<< "angle is " << main_k[0] << endl;
+			cout << "angle1 is " << ceres::atan(main_k[0]) << endl;
+			cout << "angle2 is " << ceres::atan(main_k[1]) << endl;
+			double angle = max(ceres::atan(main_k[0]), ceres::atan(main_k[1]));
+			// double angle = (ceres::atan( -final_params.back()[0] / final_params.back()[1]));
+			cerr << 180 * angle / M_PI << endl;
+			geometry_msgs::Twist tmp ;
+			if (angle > 0)
+				tmp.angular.z = -0.03;
+			else
+				tmp.angular.z = 0.03;
+			double t = fabs(angle) / 0.03 ;
+			double t0 = (ros::Time::now()).toSec();
+			cerr << t << endl;
+			while (true)
+			{
+				// double tt = (ros::Time::now()).toSec();
+				double t1 = (ros::Time::now()).toSec();
+				cmd_pub_.publish(tmp);
+				if (t1 - t0 > t)
+				{
+					cerr << t1 - t0 << endl;
+					tmp.angular.z = 0;
+					cmd_pub_.publish(tmp);
+					break;
+				}
+				// double tt1 = (ros::Time::now()).toSec();
+				// cerr <<"time is " << tt1 - tt << endl;
+				// break;
+			}
+
+			// cmd_pub_.publish(tmp);
+			cerr << "over" << endl;
+
 		}
 
 		// ros::spinOnce();
