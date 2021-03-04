@@ -103,7 +103,10 @@ include_directories(include ${catkin_INCLUDE_DIRS}
   ${Eigen_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS})
+  ${PCL_INCLUDE_DIRS}
+  /home/ecovacs/A/map_ws/csm/src
+  /home/ecovacs/A/map_ws/csm/include
+  )
 
 add_executable(showtest example/test.cc)
 target_link_libraries(showtest
@@ -111,6 +114,7 @@ target_link_libraries(showtest
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   ${CERES_LIBRARIES}
+  /home/ecovacs/A/map_ws/csm/lib/libcsm_eigen.a
   )
 
 #############
